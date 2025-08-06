@@ -1,39 +1,74 @@
-import { Injectable, UnauthorizedException } from '@nestjs/common';
+import {
+  Injectable,
+  UnauthorizedException,
+  ForbiddenException,
+} from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
+import { PrismaService } from '../prisma/prisma.service';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
+import { TokensDto } from './dto/tokens.dto';
 
 @Injectable()
 export class AuthService {
-  private users: Array<{ id: number; name: string; email: string; password: string }> = []; // Temporary in-memory store — replace with DB
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly jwtService: JwtService,
+  ) {}
 
-  constructor(private readonly jwtService: JwtService) {}
-
-  async register(dto: RegisterDto) {
+  async register(dto: RegisterDto): Promise<TokensDto> {
     const hashedPassword = await bcrypt.hash(dto.password, 10);
-    const user = { id: Date.now(), ...dto, password: hashedPassword };
-    this.users.push(user);
 
-    return this.getTokens(user.id, user.email);
+    const user = await this.prisma.user.create({
+      data: {
+        name: dto.name,
+        email: dto.email,
+        password: hashedPassword,
+      },
+    });
+
+    const tokens = await this.getTokens(user.id, user.email);
+    await this.updateRefreshToken(user.id, tokens.refreshToken);
+
+    return tokens;
   }
 
-  async login(dto: LoginDto) {
-    const user = this.users.find((u) => u.email === dto.email);
+  async login(dto: LoginDto): Promise<TokensDto> {
+    const user = await this.prisma.user.findUnique({
+      where: { email: dto.email },
+    });
     if (!user) throw new UnauthorizedException('Invalid credentials');
 
     const passwordMatches = await bcrypt.compare(dto.password, user.password);
     if (!passwordMatches)
       throw new UnauthorizedException('Invalid credentials');
 
-    return this.getTokens(user.id, user.email);
+    const tokens = await this.getTokens(user.id, user.email);
+    await this.updateRefreshToken(user.id, tokens.refreshToken);
+
+    return tokens;
   }
 
-  async refreshTokens(userId: number, email: string) {
-    return this.getTokens(userId, email);
+  async refreshTokens(userId: string, email: string): Promise<TokensDto> {
+    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+    if (!user || !user.refreshToken)
+      throw new ForbiddenException('Access denied');
+
+    const tokens = await this.getTokens(user.id, email);
+    await this.updateRefreshToken(user.id, tokens.refreshToken);
+
+    return tokens;
   }
 
-  private async getTokens(userId: number, email: string) {
+  async logout(userId: string) {
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: { refreshToken: null },
+    });
+  }
+
+  private async getTokens(userId: string, email: string): Promise<TokensDto> {
     const accessToken = await this.jwtService.signAsync(
       { sub: userId, email },
       {
@@ -51,5 +86,13 @@ export class AuthService {
     );
 
     return { accessToken, refreshToken };
+  }
+
+  private async updateRefreshToken(userId: string, refreshToken: string) {
+    const hashedRefreshToken = await bcrypt.hash(refreshToken, 10);
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: { refreshToken: hashedRefreshToken },
+    });
   }
 }
