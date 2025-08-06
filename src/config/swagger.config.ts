@@ -6,6 +6,28 @@ export function setupSwagger(app: INestApplication) {
     .setTitle('My API')
     .setDescription('API documentation')
     .setVersion('1.0')
+    .addBearerAuth(
+      {
+        type: 'http',
+        scheme: 'bearer',
+        bearerFormat: 'JWT',
+        name: 'Authorization',
+        description: 'Enter access token',
+        in: 'header',
+      },
+      'access-token', // Name for access token auth
+    )
+    .addBearerAuth(
+      {
+        type: 'http',
+        scheme: 'bearer',
+        bearerFormat: 'JWT',
+        name: 'Authorization',
+        description: 'Enter refresh token',
+        in: 'header',
+      },
+      'refresh-token', // Name for refresh token auth
+    )
     .build();
 
   const document = SwaggerModule.createDocument(app, config);
